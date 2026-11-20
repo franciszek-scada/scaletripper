@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+
+import argparse
+import random
+import sys
+
+# Dictionary mapping one-word identifiers to their base scale semitone intervals
+SCALES = {
+    "MajorPentatonic": [0, 2, 4, 7, 9],
+    "NewPentatonic": [0, 2, 4, 6, 9],
+    "JapanesePentatonic": [0, 1, 5, 7, 8],
+    "BalinesePentatonic": [0, 1, 3, 7, 8],
+    "PelogPentatonic": [0, 1, 4, 7, 8],
+    "HemitonicPentatonic3": [0, 1, 5, 7, 10],
+    "HarmonicMinor": [0, 2, 3, 5, 7, 8, 11],
+    "HarmonicMinorDom7th": [0, 1, 4, 5, 7, 8, 10],
+    "MelodicMinor": [0, 2, 3, 5, 7, 9, 11],
+    "MelodicMinorDom7th": [0, 2, 4, 6, 7, 9, 10],
+    "Esoteric6th": [0, 1, 4, 7, 8, 11],
+    "Augmented": [0, 3, 4, 7, 8, 11],
+    "Diminished": [0, 2, 3, 5, 6, 8, 9, 11],
+    "Enigmatic": [0, 1, 4, 6, 8, 10, 11],
+    "GypsyByzantine": [0, 1, 4, 5, 7, 8, 11],
+    "ArabianMajorLocrian": [0, 2, 4, 5, 6, 8, 10],
+    "Persian": [0, 1, 4, 5, 6, 8, 11],
+    "Spanish8Tone": [0, 1, 3, 4, 5, 6, 8, 10],
+    "NativeAmerican": [0, 3, 5, 7, 10],
+    "MajorBebop": [0, 2, 4, 5, 7, 8, 9, 11],
+}
+
+
+def to_vlq(value):
+  bytes_list = []
+  while True:
+    bytes_list.insert(0, value & 0x7F)
+    if value < 0x80:
+      break
+    value >>= 7
+  for i in range(len(bytes_list) - 1):
+    bytes_list[i] |= 0x80
+  return bytes(bytes_list)
+
+
+def generate_midi(
+    base_scale, output_filename, bpm=120, root_note=60, measures=16
+):
+  ticks_per_beat = 480
+  events = []
+
+  # Set tempo meta event
+  microseconds_per_beat = int(60000000 / bpm)
+  events.append(
+      (0, b"\xFF\x51\x03" + struct_pack_uint32(microseconds_per_beat)[1:])
+  )
+  # Program change: Acoustic Grand Piano (Channel 0)
+  events.append((0, b"\xC0\x00"))
+
+  swing_downbeat = int(ticks_per_beat * 0.66)
+
+  # Expand scale across two octaves starting from root note
+  scale = [root_note + note for note in base_scale] + [
+      root_note + 12 + note for note in base_scale
+  ]
+
+  time = 0
+  for _ in range(measures):
+    for beat in range(4):
+      beat_start = time + beat * ticks_per_beat
+
+      # Downbeat note option
+      if random.random() > 0.2:
+        pitch = random.choice(scale)
+        events.append(
+            (beat_start, bytes([0x90, pitch, random.randint(70, 110)]))
+        )
+        events.append(
+            (
+                beat_start + int(swing_downbeat * 0.8),
+                bytes([0x80, pitch, 0]),
+            )
+        )
+
+      # Upbeat note option
+      if random.random() > 0.4:
+        pitch = random.choice(scale)
+        events.append(
+            (
+                beat_start + swing_downbeat,
+                bytes([0x90, pitch, random.randint(60, 95)]),
+            )
+        )
+        events.append(
+            (beat_start + ticks_per_beat - 10, bytes([0x80, pitch, 0]))
+        )
+
+    time += ticks_per_beat * 4
+
+  events.append((time, b"\xFF\x2F\x00"))  # End of track
+  events.sort(key=lambda x: x[0])
+
+  track_data = bytearray()
+  current_time = 0
+  for abs_time, data in events:
+    delta = abs_time - current_time
+    track_data.extend(to_vlq(delta))
+    track_data.extend(data)
+    current_time = abs_time
+
+  header = b"MThd" + struct_pack_header(6, 0, 1, ticks_per_beat)
+  track_chunk = b"MTrk" + struct_pack_chunk_len(len(track_data)) + track_data
+
+  with open(output_filename, "wb") as f:
+    f.write(header + track_chunk)
+  print(f"Successfully generated MIDI file: {output_filename}")
+
+
+def struct_pack_uint32(val):
+  import struct
+
+  return struct.pack(">I", val)
+
+
+def struct_pack_header(length, fmt, tracks, division):
+  import struct
+
+  return struct.pack(">IHHH", length, fmt, tracks, division)
+
+
+def struct_pack_chunk_len(length):
+  import struct
+
+  return struct.pack(">I", length)
+
+
+def main():
+  parser = argparse.ArgumentParser(
+      description=(
+          "ScaleTripper -  "
+          " Generate jazz improvisation MIDI files using preset scales or custom base scale intervals."
+	  " Author: Franciszek De Ponte"
+      )
+  )
+  group = parser.add_mutually_exclusive_group(required=True)
+  group.add_argument(
+      "--scale",
+      choices=list(SCALES.keys()),
+      help="One-word identifier of a preset scale.",
+  )
+  group.add_argument(
+      "--custom",
+      type=str,
+      help=(
+          "Custom base scale intervals as comma-separated integers (e.g.,"
+          " '0,2,3,5,7,8,10')."
+      ),
+  )
+
+  parser.add_argument(
+      "--output",
+      type=str,
+      default="output_improvisation.mid",
+      help="Output filename for the MIDI file.",
+  )
+  parser.add_argument(
+      "--bpm", type=int, default=120, help="Tempo in beats per minute."
+  )
+
+  args = parser.parse_args()
+
+  if args.scale:
+    base_scale = SCALES[args.scale]
+    print(f"Using preset scale '{args.scale}': {base_scale}")
+  else:
+    try:
+      base_scale = [int(item.strip()) for item in args.custom.split(",")]
+      print(f"Using custom scale intervals: {base_scale}")
+    except ValueError:
+      print(
+          "Error: Custom scale must be comma-separated integers (e.g.,"
+          " '0,2,4,7,9').",
+          file=sys.stderr,
+      )
+      sys.exit(1)
+
+  generate_midi(base_scale, args.output, bpm=args.bpm)
+
+
+if __name__ == "__main__":
+    main()
