@@ -18,7 +18,7 @@ The utility is designed to explore scales and incorporate the explorations into 
 ## Requirements
 
 - Python **3.8+** (tested on Python 3.14)
-- No third-party packages required
+- No third-party packages required, just standard libraries imported at the top.
 
 ---
 
